@@ -176,6 +176,12 @@ export const api = {
     if (!response.ok) throw new Error('Failed to fetch sentiment');
     return response.json();
   },
+  
+  getAnalysisAlerts: async (jobId: string): Promise<any> => {
+    const response = await fetch(`${api.API_BASE_URL}/api/analysis/${jobId}/alerts`);
+    if (!response.ok) throw new Error('Failed to fetch alerts');
+    return response.json();
+  },
 
   exportAnalysisPdf: async (jobId: string, includeSections: string[] = ["overview","offerings","market-signals","sentiment"]): Promise<Blob> => {
     const response = await fetch(`${api.API_BASE_URL}/api/analysis/${jobId}/export/pdf`, {
@@ -186,5 +192,16 @@ export const api = {
     if (!response.ok) throw new Error('Failed to export PDF');
     const blob = await response.blob();
     return blob;
+  },
+
+  // Chat: Salaar (Business Advisor)
+  chatSalaar: async (message: string): Promise<{ reply: string }> => {
+    const response = await fetch(`${api.API_BASE_URL}/api/chat/salaar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message })
+    });
+    if (!response.ok) throw new Error('Failed to get chat reply');
+    return response.json();
   }
 };

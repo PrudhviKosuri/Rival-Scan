@@ -7,8 +7,10 @@ import OfferingsPage from "@/pages/OfferingsPage"
 import MarketSignalsPage from "@/pages/MarketSignalsPage"
 import SentimentPage from "@/pages/SentimentPage"
 import DocumentationPage from "@/pages/DocumentationPage"
+import AlertsPage from "@/pages/AlertsPage"
 import ConditionalLayout from "@/components/ConditionalLayout"
 import { Toaster } from "@/components/ui/toaster"
+import SalaarChat from "@/components/SalaarChat"
 
 function App() {
   return (
@@ -22,8 +24,10 @@ function App() {
           <Route path="/market-signals" element={<MarketSignalsPage />} />
           <Route path="/sentiment" element={<SentimentPage />} />
           <Route path="/documentation" element={<DocumentationPage />} />
+          <Route path="/alerts/:jobId" element={<AlertsPage />} />
           <Route path="/test" element={<TestPage />} />
         </Routes>
+        <SalaarChat />
         <Toaster />
       </ConditionalLayout>
     </BrowserRouter>

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 
 import { api } from "@/services/api"
+import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } from "recharts"
 
 interface AnalysisData {
     jobId: string
@@ -151,6 +152,87 @@ export default function MarketSignalsPage() {
                             ) : (
                                 <div className="bg-white/80 p-6 rounded-xl">
                                     <p>No financial data available.</p>
+                                </div>
+                            )}
+
+                            {/* Competitor Trend */}
+                            {signalsData.competitor_trend ? (
+                                <div className="bg-white/95 p-6 rounded-xl shadow-sm">
+                                    <h3 className="text-2xl font-bold mb-4 text-blue-900 border-b pb-2" style={{ textShadow: '0 0 5px rgba(0,0,0,0.12)' }}>
+                                        {signalsData.competitor_trend.competitor_name} – {signalsData.competitor_trend.metric} history
+                                    </h3>
+                                    <div style={{ width: '100%', height: 320 }}>
+                                        <ResponsiveContainer>
+                                            <LineChart data={signalsData.competitor_trend.history}>
+                                                <CartesianGrid strokeDasharray="3 3" />
+                                                <XAxis dataKey="period" />
+                                                <YAxis />
+                                                <Tooltip />
+                                                <Line type="monotone" dataKey="value" stroke="#1E3A8A" strokeWidth={2} dot={false} />
+                                            </LineChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                    <p className="text-sm mt-3" style={{ color: 'rgba(0,0,0,0.6)' }}>
+                                        {signalsData.competitor_trend.analysis_note}
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="bg-white/80 p-6 rounded-xl">
+                                    <p>Competitor trend unavailable</p>
+                                </div>
+                            )}
+
+                            {/* Graph Data: Revenue History */}
+                            {signalsData.graph_data?.revenue_history ? (
+                                <div className="bg-white/95 p-6 rounded-xl shadow-sm">
+                                    <h3 className="text-2xl font-bold mb-4 text-purple-900 border-b pb-2" style={{ textShadow: '0 0 5px rgba(0,0,0,0.12)' }}>
+                                        Revenue History (Estimated)
+                                    </h3>
+                                    <div style={{ width: '100%', height: 300 }}>
+                                        <ResponsiveContainer>
+                                            <LineChart data={signalsData.graph_data.revenue_history}>
+                                                <CartesianGrid strokeDasharray="3 3" />
+                                                <XAxis dataKey="year" />
+                                                <YAxis />
+                                                <Tooltip />
+                                                <Line type="monotone" dataKey="estimated_value" stroke="#7C3AED" strokeWidth={2} dot={false} />
+                                            </LineChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                    <p className="text-sm mt-3" style={{ color: 'rgba(0,0,0,0.6)' }}>
+                                        Values are conservative estimates with confidence per year.
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="bg-white/80 p-6 rounded-xl">
+                                    <p>Revenue history not available</p>
+                                </div>
+                            )}
+
+                            {/* Graph Data: Growth Rate History */}
+                            {signalsData.graph_data?.growth_rate_history ? (
+                                <div className="bg-white/95 p-6 rounded-xl shadow-sm">
+                                    <h3 className="text-2xl font-bold mb-4 text-indigo-900 border-b pb-2" style={{ textShadow: '0 0 5px rgba(0,0,0,0.12)' }}>
+                                        Growth Rate History (Estimated %)
+                                    </h3>
+                                    <div style={{ width: '100%', height: 300 }}>
+                                        <ResponsiveContainer>
+                                            <LineChart data={signalsData.graph_data.growth_rate_history}>
+                                                <CartesianGrid strokeDasharray="3 3" />
+                                                <XAxis dataKey="year" />
+                                                <YAxis />
+                                                <Tooltip />
+                                                <Line type="monotone" dataKey="estimated_percentage" stroke="#1D4ED8" strokeWidth={2} dot={false} />
+                                            </LineChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                    <p className="text-sm mt-3" style={{ color: 'rgba(0,0,0,0.6)' }}>
+                                        Trends reflect direction (increase/stable/decline) without unrealistic jumps.
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="bg-white/80 p-6 rounded-xl">
+                                    <p>Growth rate history not available</p>
                                 </div>
                             )}
                         </div>

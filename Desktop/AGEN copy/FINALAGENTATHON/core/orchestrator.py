@@ -3,6 +3,7 @@ Orchestrator API (FastAPI)
 Main entry point for orchestrating agent calls with context building
 """
 import os
+import json
 import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional, List
@@ -12,6 +13,7 @@ import io
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
+from google.genai import Client as GeminiClientRaw, types as GeminiTypes
 
 from .storage import ContextStorage
 from .context_builder import ContextBuilder
@@ -467,6 +469,63 @@ async def process_with_agent_service(
     )
     return result
 
+class SalaarChatRequest(BaseModel):
+    message: str
+
+@app.post("/api/chat/salaar")
+async def chat_salaar(req: SalaarChatRequest):
+    try:
+        api_key = os.environ.get("GOOGLE_API_KEY")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="GOOGLE_API_KEY not configured")
+        client = GeminiClientRaw(api_key=api_key)
+        system_prompt = (
+            "You are a 'Market Intelligence & MSME Consultant' named Salaar.\n\n"
+            "Your responsibilities:\n"
+            "1. Competitor analysis and rival intelligence\n"
+            "2. Marketing strategies and digital growth advice\n"
+            "3. MSME and small business consulting\n"
+            "4. Market and business news insights\n\n"
+            "STRICT RULES:\n"
+            "- Answer ONLY business, marketing, competitors, and MSME topics\n"
+            "- If a user asks about non-business topics, politely decline and redirect to business strategy\n"
+            "- Maintain a professional, analytical, and supportive tone"
+        )
+        response = None
+        for model_name in [
+            "models/gemini-2.0-flash",
+            "models/gemini-flash-latest",
+            "models/gemini-2.5-flash",
+            "models/gemini-pro-latest",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro"
+        ]:
+            try:
+                if hasattr(client, "responses"):
+                    response = client.responses.generate(
+                        model=model_name,
+                        system_instruction=system_prompt,
+                        input=req.message,
+                    )
+                else:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=[req.message]
+                    )
+                break
+            except Exception:
+                response = None
+        if response is None:
+            raise HTTPException(status_code=502, detail="Model generation failed")
+        reply_text = (response.text or "").strip()
+        if not reply_text:
+            raise HTTPException(status_code=502, detail="Empty reply from model")
+        return {"reply": reply_text}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/analysis/create")
 async def create_analysis_job(request: CreateAnalysisRequest, background_tasks: BackgroundTasks):
     """
@@ -620,6 +679,8 @@ async def get_analysis_signals(job_id: str):
         value = obj.get("value")
         currency = obj.get("currency")
         unit = obj.get("unit")
+        if value is None and not currency and not unit:
+            return "Unavailable"
         parts = []
         if value is not None:
             parts.append(str(value))
@@ -627,7 +688,7 @@ async def get_analysis_signals(job_id: str):
             parts.append(str(currency))
         text = " ".join(parts).strip()
         if unit:
-            text = f"{text} ({unit})"
+            text = f"{text} ({unit})" if text else f"{unit}"
         return text
 
     growth = fin.get("growth_rate")
@@ -650,6 +711,9 @@ async def get_analysis_signals(job_id: str):
         analysis_parts.append(f"Drivers: {', '.join([str(d) for d in drivers])}.")
     analysis_summary = " ".join(analysis_parts).strip()
 
+    comp_trend = (results.get("competitor_trend", {}) or {}).get("agent_output", {}) or None
+    graph_data = (results.get("graph_data", {}) or {}).get("agent_output", {}) or None
+
     return {
         "financials": {
             "revenue": format_turnover(fin.get("annual_turnover", {})),
@@ -657,6 +721,8 @@ async def get_analysis_signals(job_id: str):
             "growth_rate": growth_str,
             "analysis_summary": analysis_summary
         },
+        "competitor_trend": comp_trend,
+        "graph_data": graph_data,
         "confidence": compute_confidence(fin)
     }
 
@@ -897,6 +963,84 @@ async def get_followups(job_id: str):
     results = job["result"].get("results", {})
     return {"questions": generate_followups(results)}
 
+@app.get("/api/analysis/{job_id}/alerts")
+async def get_analysis_alerts(job_id: str):
+    job = job_storage.get_job(job_id)
+    if not job or not job.get("result"):
+        raise HTTPException(status_code=404, detail="Analysis results not found")
+    if job.get("status") != "completed":
+        return JSONResponse(content={"error": "Analysis not complete"}, status_code=409)
+    full = job["result"]
+    results = full.get("results", {})
+    existing = (results.get("alerts_agent", {}) or {}).get("agent_output", {}) or None
+    if existing and isinstance(existing, dict) and "alerts" in existing:
+        return existing
+    ov = results.get("company_overview", {}).get("agent_output", {}) or {}
+    fin = results.get("revenue_turnover", {}).get("agent_output", {}) or {}
+    pricing = results.get("pricing_change", {}).get("agent_output", {}) or {}
+    launches = results.get("product_launch", {}).get("agent_output", {}) or {}
+    graph = results.get("graph_data", {}).get("agent_output", {}) or {}
+    sentiment = results.get("sentiment", {}).get("agent_output", {}) or {}
+    name = ov.get("company_name") or ov.get("company") or job["entity"]
+    domain = ov.get("industry") or ""
+    alerts_schema = {
+        "type": "object",
+        "properties": {
+            "alerts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "enum": ["Opportunity", "Risk", "Watch"]},
+                        "severity": {"type": "string", "enum": ["Low", "Medium", "High"]},
+                        "title": {"type": "string"},
+                        "description": {"type": "string"},
+                        "recommended_action": {"type": "string"},
+                        "time_horizon": {"type": "string", "enum": ["Immediate", "Short-term", "Mid-term", "Long-term"]},
+                        "confidence": {"type": "number"}
+                    },
+                    "required": ["type", "severity", "title", "description", "recommended_action", "time_horizon", "confidence"]
+                },
+                "minItems": 3,
+                "maxItems": 7
+            },
+            "summary": {"type": "string"}
+        },
+        "required": ["alerts", "summary"]
+    }
+    prompt = (
+        f"Domain: {domain}\n"
+        f"Company: {name}\n\n"
+        f"Offerings Pricing: {json.dumps(pricing)[:2000]}\n"
+        f"Offerings Launches: {json.dumps(launches)[:2000]}\n"
+        f"Market Signals: {json.dumps(fin)[:2000]}\n"
+        f"Graph Data: {json.dumps(graph)[:2000]}\n"
+        f"Sentiment: {json.dumps(sentiment)[:2000]}\n\n"
+        "Synthesize critical alerts. Follow the schema. Minimum 3, maximum 7. Include at least one Opportunity and one Risk. Severity must be logically justified. Avoid generic repetition. Return valid JSON only."
+    )
+    try:
+        out = agent_service.process_agent_request(
+            entity=name,
+            agent_type="alerts_agent",
+            prompt=prompt,
+            schema=alerts_schema,
+            system_instruction=None,
+            use_search=True,
+            store_result=True,
+            validate_output=True
+        )
+        if out.get("success") and out.get("data"):
+            results["alerts_agent"] = {
+                "agent_name": "alerts_agent",
+                "agent_output": out["data"],
+                "timestamp": datetime.now().isoformat()
+            }
+            full["results"] = results
+            job_storage.update_job(job_id, job["status"], full)
+            return out["data"]
+    except Exception:
+        pass
+    return JSONResponse(content={"error": "Alerts generation failed"}, status_code=500)
 class ExportConfig(BaseModel):
     include_sections: Optional[List[str]] = None
 
@@ -1014,6 +1158,17 @@ async def export_analysis_pdf(job_id: str, config: Optional[ExportConfig] = None
         if ms.get("confidence"):
             c = ms["confidence"]
             lines.append(f"Market Signals Confidence: {c.get('score',0.0)} ({c.get('reason','')})")
+        ct = ms.get("competitor_trend") or None
+        if isinstance(ct, dict) and ct.get("history"):
+            lines.append("Estimated competitor trend based on market analysis")
+            lines.append(f"{ct.get('competitor_name','')} – {ct.get('metric','')} ({ct.get('unit','')})")
+            try:
+                for item in ct["history"][:10]:
+                    period = item.get("period")
+                    value = item.get("value")
+                    lines.append(f"- {period}: {value}")
+            except Exception:
+                pass
     if "sentiment" in include:
         se = await get_analysis_sentiment(job_id)
         lines.append(f"Sentiment: {se.get('sentiment_summary','Neutral')}")
@@ -1131,6 +1286,129 @@ async def run_analysis_job(job_id: str, entity: str):
                 "agent_output": conf_bundle,
                 "timestamp": datetime.now().isoformat()
             }
+            graph_schema = {
+                "type": "object",
+                "properties": {
+                    "revenue_history": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "year": {"type": "string"},
+                                "estimated_value": {"type": "number"},
+                                "confidence": {"type": "number"}
+                            },
+                            "required": ["year", "estimated_value", "confidence"]
+                        },
+                        "minItems": 3,
+                        "maxItems": 6
+                    },
+                    "growth_rate_history": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "year": {"type": "string"},
+                                "estimated_percentage": {"type": "number"}
+                            },
+                            "required": ["year", "estimated_percentage"]
+                        },
+                        "minItems": 3,
+                        "maxItems": 6
+                    }
+                },
+                "required": ["revenue_history", "growth_rate_history"]
+            }
+            graph_prompt = (
+                "You are an AI-powered Market Intelligence & Competitive Strategy Agent.\n\n"
+                "Your role is to produce precise, structured, and decision-ready business intelligence for dashboards and charts.\n\n"
+                "You will ALWAYS receive:\n"
+                "- A business domain\n"
+                "- A target company / competitor name\n\n"
+                "You must analyze the company STRICTLY within the given domain context.\n\n"
+                "Generate TIME-SERIES graph data that aligns with market signals:\n"
+                "- Use the last 3–5 years\n"
+                "- Values must align with market trends (increasing, stable, declining)\n"
+                "- No flat or unrealistic jumps\n"
+                "- If exact data is unavailable, provide conservative estimates and ranges\n\n"
+                "Return ONLY valid JSON matching the provided schema.\n"
+                "Do NOT include explanations."
+            )
+            graph_result = agent_service.process_agent_request(
+                entity=entity,
+                agent_type="graph_data",
+                prompt=graph_prompt,
+                schema=graph_schema,
+                system_instruction=None,
+                use_search=True,
+                store_result=True,
+                validate_output=True
+            )
+            if graph_result.get("success") and graph_result.get("data"):
+                final_result["results"]["graph_data"] = {
+                    "agent_name": "graph_data",
+                    "agent_output": graph_result["data"],
+                    "timestamp": datetime.now().isoformat()
+                }
+            comp_schema = {
+                "type": "object",
+                "properties": {
+                    "competitor_name": {"type": "string"},
+                    "metric": {"type": "string", "enum": ["revenue", "market_share", "growth_index"]},
+                    "unit": {"type": "string", "enum": ["USD", "%", "index"]},
+                    "history": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "period": {"type": "string"},
+                                "value": {"type": "number"}
+                            },
+                            "required": ["period", "value"]
+                        },
+                        "minItems": 6,
+                        "maxItems": 12
+                    },
+                    "analysis_note": {"type": "string"}
+                },
+                "required": ["competitor_name", "metric", "unit", "history"]
+            }
+            comp_prompt = (
+                "You are a market intelligence analyst.\n\n"
+                "Given:\n"
+                "- Company market signals\n"
+                "- Industry context\n"
+                "- Competitive landscape\n\n"
+                "Identify ONE major competitor.\n\n"
+                "Generate a realistic historical trend for the competitor over time.\n"
+                "The trend must:\n"
+                "- Span 6 to 12 time periods (quarters or years)\n"
+                "- Show logically consistent movement (no random jumps)\n"
+                "- Reflect market growth, decline, or stability\n\n"
+                "Allowed metrics:\n"
+                "- revenue\n"
+                "- market_share\n"
+                "- growth_index\n\n"
+                "If exact data is unavailable, infer conservative estimates based on industry norms.\n\n"
+                "Output ONLY valid JSON.\n"
+                "Do NOT include explanations."
+            )
+            comp_result = agent_service.process_agent_request(
+                entity=entity,
+                agent_type="competitor_trend",
+                prompt=comp_prompt,
+                schema=comp_schema,
+                system_instruction=None,
+                use_search=True,
+                store_result=True,
+                validate_output=True
+            )
+            if comp_result.get("success") and comp_result.get("data"):
+                final_result["results"]["competitor_trend"] = {
+                    "agent_name": "competitor_trend",
+                    "agent_output": comp_result["data"],
+                    "timestamp": datetime.now().isoformat()
+                }
         except Exception:
             pass
             
