@@ -1,45 +1,71 @@
 """
-Configuration for Orchestrator
+Production-ready configuration for Orchestrator
 """
 import os
-from typing import Dict
+from typing import Dict, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Config:
-    """Orchestrator configuration"""
+    """Production-ready orchestrator configuration"""
     
-    # API Keys
-    GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+    # Required API Keys - Must be set in production
+    GOOGLE_API_KEY: Optional[str] = os.environ.get("GOOGLE_API_KEY")
     
-    # Server settings
-    ORCHESTRATOR_PORT = int(os.environ.get("ORCHESTRATOR_PORT", 8000))
-    ORCHESTRATOR_HOST = os.environ.get("ORCHESTRATOR_HOST", "0.0.0.0")
+    # Server settings - Production compatible
+    PORT: int = int(os.environ.get("PORT", os.environ.get("ORCHESTRATOR_PORT", 8000)))
+    HOST: str = os.environ.get("HOST", os.environ.get("ORCHESTRATOR_HOST", "0.0.0.0"))
     
-    # Storage settings
-    ORCHESTRATOR_DB = os.environ.get("ORCHESTRATOR_DB", "orchestrator_context.db")
+    # CORS settings - Configurable for production
+    FRONTEND_URL: str = os.environ.get("FRONTEND_URL", "*")
+    CORS_ORIGINS: str = os.environ.get("CORS_ORIGINS", "*")
     
-    # Agent registry (can be overridden via environment)
-    # Maps to A2A Agent Router structure:
-    # - agent_ac: Company Overview Agent (port 9001)
-    # - agent_at: Revenue/Turnover Agent (port 9002)
-    # - agent_pc: Pricing Change Agent (port 9003)
-    # - agent_sc: Product Launch Agent (port 9004, primary)
-    # - agent_pl: Product Launch Agent (port 9005, fallback)
+    # Database settings - Use absolute paths in production
+    ORCHESTRATOR_DB: str = os.environ.get("ORCHESTRATOR_DB", "orchestrator_context.db")
+    MANAGED_STORAGE_DB: str = os.environ.get("MANAGED_STORAGE_DB", "managed_storage.db")
+    
+    # Performance & timeout settings
+    REQUEST_TIMEOUT: int = int(os.environ.get("REQUEST_TIMEOUT", 30))
+    GEMINI_TIMEOUT: int = int(os.environ.get("GEMINI_TIMEOUT", 60))
+    MAX_CONCURRENT_JOBS: int = int(os.environ.get("MAX_CONCURRENT_JOBS", 10))
+    
+    # Logging configuration
+    LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "INFO")
+    STRUCTURED_LOGGING: bool = os.environ.get("STRUCTURED_LOGGING", "true").lower() == "true"
+    
+    # Application metadata
+    APP_NAME: str = os.environ.get("APP_NAME", "ACIA-Backend")
+    VERSION: str = os.environ.get("VERSION", "1.0.0")
+    ENVIRONMENT: str = os.environ.get("ENVIRONMENT", "development")
+    
+    @classmethod
+    def validate_required_config(cls) -> None:
+        """Validate that all required configuration is present"""
+        if not cls.GOOGLE_API_KEY:
+            if cls.ENVIRONMENT == "production":
+                raise ValueError("GOOGLE_API_KEY is required in production environment")
+            else:
+                logger.warning("⚠️ GOOGLE_API_KEY not found. Gemini calls will fail.")
+    
+    @classmethod
+    def is_production(cls) -> bool:
+        """Check if running in production environment"""
+        return cls.ENVIRONMENT.lower() in ("production", "prod")
+    
+    @classmethod 
+    def get_cors_origins(cls) -> list:
+        """Get parsed CORS origins"""
+        if cls.CORS_ORIGINS == "*":
+            return ["*"]
+        return [origin.strip() for origin in cls.CORS_ORIGINS.split(",")]
+    
+    # Legacy agent registry (optional - not used in current implementation)
     DEFAULT_AGENTS: Dict[str, str] = {
-        "agent_ac": os.environ.get("AGENT_AC_URL", "http://localhost:9001/agent_ac"),  # Company Overview
-        "agent_at": os.environ.get("AGENT_AT_URL", "http://localhost:9001/agent_at"),  # Revenue/Turnover
-        "agent_pc": os.environ.get("AGENT_PC_URL", "http://localhost:9001/agent_pc"),  # Pricing Change
-        "agent_sc": os.environ.get("AGENT_SC_URL", "http://localhost:9001/agent_sc"),  # Product Launch (primary)
-        "agent_pl": os.environ.get("AGENT_PL_URL", "http://localhost:9001/agent_pl"),  # Product Launch (fallback)
+        "agent_ac": os.environ.get("AGENT_AC_URL", "http://localhost:9001/agent_ac"),
+        "agent_at": os.environ.get("AGENT_AT_URL", "http://localhost:9001/agent_at"), 
+        "agent_pc": os.environ.get("AGENT_PC_URL", "http://localhost:9001/agent_pc"),
+        "agent_sc": os.environ.get("AGENT_SC_URL", "http://localhost:9001/agent_sc"),
+        "agent_pl": os.environ.get("AGENT_PL_URL", "http://localhost:9001/agent_pl"),
     }
-    
-    # Context settings
-    DEFAULT_SIGNAL_HOURS_BACK = int(os.environ.get("SIGNAL_HOURS_BACK", 168))  # 7 days
-    DEFAULT_OUTPUT_TTL_SECONDS = int(os.environ.get("OUTPUT_TTL_SECONDS", 3600))  # 1 hour
-    DEFAULT_FACT_EXPIRY_HOURS = int(os.environ.get("FACT_EXPIRY_HOURS", 720))  # 30 days
-    
-    # Confidence threshold for storing facts
-    CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", 0.5))
-    
-    # Timeout for agent calls
-    AGENT_TIMEOUT = int(os.environ.get("AGENT_TIMEOUT", 30))
 

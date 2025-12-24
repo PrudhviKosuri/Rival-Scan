@@ -1,1 +1,1 @@
-export { apiClient, api } from "./api"
+export { api } from "./api"

@@ -1,7 +1,67 @@
 import { trackEvent } from './telemetry';
 
-// Mock delay helper
+// Production-ready API utilities
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Retry configuration
+const RETRY_CONFIG = {
+  maxRetries: 3,
+  baseDelay: 1000,
+  maxDelay: 5000,
+};
+
+// Enhanced fetch with retry logic and error handling
+const fetchWithRetry = async (
+  url: string, 
+  options: RequestInit = {}, 
+  retries = RETRY_CONFIG.maxRetries
+): Promise<Response> => {
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options.headers,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    return response;
+  } catch (error) {
+    if (retries > 0 && shouldRetry(error)) {
+      const delayMs = Math.min(
+        RETRY_CONFIG.baseDelay * Math.pow(2, RETRY_CONFIG.maxRetries - retries),
+        RETRY_CONFIG.maxDelay
+      );
+      
+      console.warn(`Request failed, retrying in ${delayMs}ms... (${retries} retries left)`, error);
+      await delay(delayMs);
+      return fetchWithRetry(url, options, retries - 1);
+    }
+    
+    throw error;
+  }
+};
+
+// Determine if error should trigger retry
+const shouldRetry = (error: any): boolean => {
+  if (!error) return false;
+  
+  // Retry on network errors
+  if (error.name === 'TypeError' || error.message.includes('fetch')) {
+    return true;
+  }
+  
+  // Retry on specific HTTP status codes
+  if (error.message.includes('HTTP 5') || error.message.includes('HTTP 429')) {
+    return true;
+  }
+  
+  return false;
+};
 
 // --- Types ---
 export interface Source {
@@ -134,35 +194,70 @@ export const api = {
   },
 
   // --- ACIA Backend Integration ---
-  API_BASE_URL: "http://localhost:8000",
+  // Production-ready API configuration
+  get API_BASE_URL(): string {
+    // In production, use environment variable or detect from current location
+    if (import.meta.env.VITE_API_BASE_URL) {
+      return import.meta.env.VITE_API_BASE_URL;
+    }
+    
+    // Development fallback
+    if (import.meta.env.DEV) {
+      return "http://localhost:8000";
+    }
+    
+    // For production, try common patterns
+    const currentHost = window.location.hostname;
+    if (currentHost === 'localhost' || currentHost === '127.0.0.1') {
+      return "http://localhost:8000";
+    }
+    
+    // Production fallback - assume backend is at same host different port or subdomain
+    return window.location.protocol + '//' + window.location.hostname + ':8000';
+  },
 
   createAnalysisJob: async (domain: string, competitor: string): Promise<{ job_id: string; status: string }> => {
     trackEvent('analysis_create', { domain, competitor });
-    const response = await fetch(`${api.API_BASE_URL}/api/analysis/create`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ domain, competitor })
-    });
-    if (!response.ok) throw new Error('Failed to create analysis job');
-    return response.json();
+    try {
+      const response = await fetchWithRetry(`${api.API_BASE_URL}/api/analysis/create`, {
+        method: 'POST',
+        body: JSON.stringify({ domain, competitor })
+      });
+      return await response.json();
+    } catch (error) {
+      console.error('Failed to create analysis job:', error);
+      throw new Error('Failed to create analysis job. Please check your connection and try again.');
+    }
   },
 
   getJobStatus: async (jobId: string): Promise<{ job_id: string; status: string; progress: number }> => {
-    const response = await fetch(`${api.API_BASE_URL}/api/jobs/${jobId}/status`);
-    if (!response.ok) throw new Error('Failed to fetch job status');
-    return response.json();
+    try {
+      const response = await fetchWithRetry(`${api.API_BASE_URL}/api/jobs/${jobId}/status`);
+      return await response.json();
+    } catch (error) {
+      console.error('Failed to get job status:', error);
+      throw new Error('Failed to get job status. The analysis may still be running.');
+    }
   },
 
   getAnalysisOverview: async (jobId: string): Promise<any> => {
-    const response = await fetch(`${api.API_BASE_URL}/api/analysis/${jobId}/overview`);
-    if (!response.ok) throw new Error('Failed to fetch overview');
-    return response.json();
+    try {
+      const response = await fetchWithRetry(`${api.API_BASE_URL}/api/analysis/${jobId}/overview`);
+      return await response.json();
+    } catch (error) {
+      console.error('Failed to get overview:', error);
+      throw new Error('Failed to load overview data. Please try refreshing the page.');
+    }
   },
 
   getAnalysisOfferings: async (jobId: string): Promise<any> => {
-    const response = await fetch(`${api.API_BASE_URL}/api/analysis/${jobId}/offerings`);
-    if (!response.ok) throw new Error('Failed to fetch offerings');
-    return response.json();
+    try {
+      const response = await fetchWithRetry(`${api.API_BASE_URL}/api/analysis/${jobId}/offerings`);
+      return await response.json();
+    } catch (error) {
+      console.error('Failed to get offerings:', error);
+      throw new Error('Failed to load offerings data. Please try refreshing the page.');
+    }
   },
 
   getAnalysisSignals: async (jobId: string): Promise<any> => {

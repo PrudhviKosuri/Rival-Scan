@@ -5,7 +5,7 @@ import { AlertCircle, CheckCircle, Clock, Share2, Copy, FileText, Download, User
 import { useState, useEffect } from "react"
 import { api, Source, InsightExplanation } from "@/services/api"
 import { useToast } from "@/hooks/use-toast"
-import { Card } from "@/components/ui/card"
+import { Card } from "@/components/ui/Card"
 
 // --- Helper: Document Viewer Modal (Local) ---
 // This is a simplified version of the full Documents page viewer for modal context

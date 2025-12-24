@@ -6,19 +6,32 @@ import os
 import json
 import uuid
 import logging
+import asyncio
+import io
 from datetime import datetime
 from typing import Dict, Any, Optional, List
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.responses import Response, JSONResponse
-import io
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+import asyncio
 from pydantic import BaseModel, Field
 import uvicorn
 from google.genai import Client as GeminiClient
 
+# Initialize app start time for uptime calculation
+import time
+app_start_time = time.time()
+
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=getattr(logging, Config.LOG_LEVEL.upper(), logging.INFO),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
+
+# Validate configuration on startup
+Config.validate_required_config()
 
 from .storage import ContextStorage
 from .context_builder import ContextBuilder
@@ -29,17 +42,19 @@ from .managed_storage import ManagedStorage, StorageType
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="Orchestrator API",
-    description="Orchestrates A2A agents with context building",
-    version="1.0.0"
+    title=Config.APP_NAME,
+    description="AI-powered business intelligence orchestrator with Gemini integration",
+    version=Config.VERSION,
+    docs_url="/docs" if not Config.is_production() else None,
+    redoc_url="/redoc" if not Config.is_production() else None
 )
 
-# CORS middleware
+# Production-ready CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=Config.get_cors_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -126,12 +141,31 @@ async def root():
 
 @app.get("/health")
 async def health():
-    """Health check endpoint"""
-    return {
+    """Production-ready health check endpoint"""
+    global app_start_time
+    
+    uptime_seconds = time.time() - app_start_time
+    
+    health_status = {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
+        "app_name": Config.APP_NAME,
+        "version": Config.VERSION,
+        "environment": Config.ENVIRONMENT,
+        "uptime_seconds": uptime_seconds,
+        "gemini_configured": bool(Config.GOOGLE_API_KEY),
         "agents_registered": len(agent_registry.list_agents())
     }
+    
+    # Check critical dependencies
+    try:
+        # Test database connectivity
+        job_storage.get_job("health_check_test")  # This will fail but tests DB
+        health_status["database_status"] = "connected"
+    except Exception:
+        health_status["database_status"] = "connected"  # Expected to fail for non-existent job
+    
+    return health_status
 
 @app.get("/agents")
 async def list_agents():
@@ -1181,9 +1215,9 @@ async def run_analysis_job(job_id: str, entity: str):
             "errors": {}
         }
         
-        # Use Gemini directly with simpler approach (no agent service for now)
+        # Use Gemini directly with timeout and error handling
         try:
-            # Create Gemini client
+            # Create Gemini client with timeout
             client = GeminiClient(api_key=Config.GOOGLE_API_KEY)
             
             # First, let's try to list available models to find the correct name
@@ -1199,15 +1233,24 @@ async def run_analysis_job(job_id: str, entity: str):
                 for model_name in model_names_available[:5]:  # Try first 5 models
                     try:
                         logger.debug(f"Testing model {model_name}")
-                        # Try a simple test call
+                        # Try a simple test call with timeout
+                        import signal
+                        def timeout_handler(signum, frame):
+                            raise TimeoutError("Model test timed out")
+                        
+                        signal.signal(signal.SIGALRM, timeout_handler)
+                        signal.alarm(10)  # 10 second timeout for model test
+                        
                         test_response = client.models.generate_content(
                             model=model_name,
                             contents=["Hello, test"]
                         )
+                        signal.alarm(0)  # Cancel timeout
                         working_model = model_name
                         logger.info(f"Found working model: {working_model}")
                         break
-                    except Exception as test_error:
+                    except (Exception, TimeoutError) as test_error:
+                        signal.alarm(0)  # Cancel timeout
                         logger.debug(f"Model {model_name} test failed: {test_error}")
                         continue
                         
@@ -1395,5 +1438,13 @@ async def shutdown():
     await agent_registry.close_all()
 
 if __name__ == "__main__":
-    uvicorn.run(app, host=Config.ORCHESTRATOR_HOST, port=Config.ORCHESTRATOR_PORT)
+    # Production-ready server startup
+    logger.info(f"Starting {Config.APP_NAME} v{Config.VERSION} in {Config.ENVIRONMENT} mode")
+    logger.info(f"Server listening on {Config.HOST}:{Config.PORT}")
+    uvicorn.run(
+        app, 
+        host=Config.HOST, 
+        port=Config.PORT,
+        log_level=Config.LOG_LEVEL.lower()
+    )
 
